@@ -1,4 +1,4 @@
-import { apiClient } from './api-client';
+import { apiClient, auth } from './api-client';
 
 // Mapeamento de tabelas para APIs
 const tableToApi = {
@@ -95,8 +95,40 @@ export const supabase = {
 
   // Auth compatível (se necessário no futuro)
   auth: {
-    getSession: async () => ({ data: { session: null }, error: null }),
+    getSession: async () => {
+      const user = auth.getUser();
+      const token = localStorage.getItem('auth_token');
+      return {
+        data: {
+          session: token ? { access_token: token, user } : null
+        },
+        error: null
+      };
+    },
+    getUser: async () => {
+      const user = auth.getUser();
+      return { data: { user }, error: null };
+    },
     signIn: async () => ({ data: null, error: null }),
-    signOut: async () => ({ data: null, error: null }),
+    signOut: async () => {
+      await auth.logout();
+      return { error: null };
+    },
+    onAuthStateChange: (callback: (event: string, session: any) => void) => {
+      // Execute callback immediately with current state
+      const user = auth.getUser();
+      const token = localStorage.getItem('auth_token');
+      const session = token ? { access_token: token, user } : null;
+
+      callback(session ? 'SIGNED_IN' : 'SIGNED_OUT', session);
+
+      return {
+        data: {
+          subscription: {
+            unsubscribe: () => { },
+          },
+        },
+      };
+    },
   },
 };
