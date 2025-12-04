@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { customersApi } from "@/lib/api-client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -21,18 +21,11 @@ export default function Clientes() {
 
   const { data: customers = [] } = useQuery({
     queryKey: ['customers'],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('customers').select('*').order('name');
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => customersApi.getAll(),
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: any) => {
-      const { error } = await supabase.from('customers').insert([data]);
-      if (error) throw error;
-    },
+    mutationFn: (data: any) => customersApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['customers'] });
       toast.success("Cliente cadastrado com sucesso!");
@@ -41,10 +34,7 @@ export default function Clientes() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: any }) => {
-      const { error } = await supabase.from('customers').update(data).eq('id', id);
-      if (error) throw error;
-    },
+    mutationFn: ({ id, data }: { id: string; data: any }) => customersApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['customers'] });
       toast.success("Cliente atualizado com sucesso!");
@@ -54,10 +44,7 @@ export default function Clientes() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from('customers').delete().eq('id', id);
-      if (error) throw error;
-    },
+    mutationFn: (id: string) => customersApi.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['customers'] });
       toast.success("Cliente excluído com sucesso!");
@@ -66,8 +53,7 @@ export default function Clientes() {
 
   const deleteMultipleMutation = useMutation({
     mutationFn: async (ids: string[]) => {
-      const { error } = await supabase.from('customers').delete().in('id', ids);
-      if (error) throw error;
+      await Promise.all(ids.map(id => customersApi.delete(id)));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['customers'] });
@@ -85,7 +71,7 @@ export default function Clientes() {
   };
 
   const handleSelectOne = (id: string) => {
-    setSelectedIds(prev => 
+    setSelectedIds(prev =>
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
   };
@@ -109,7 +95,7 @@ export default function Clientes() {
         c.city || '', c.state || '', c.address || ''
       ])
     ].map(row => row.join(',')).join('\n');
-    
+
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -214,7 +200,7 @@ export default function Clientes() {
                 <div className="md:col-span-2 flex gap-2">
                   <Button type="submit">{editingCustomer ? 'Atualizar' : 'Cadastrar'}</Button>
                   <Button type="button" variant="outline" onClick={() => { setShowForm(false); setEditingCustomer(null); }}>Cancelar</Button>
-                  <CopyButton 
+                  <CopyButton
                     textToCopy={`Nome: \nEmail: \nTelefone: \nCPF/CNPJ: \nEndereço: \nCidade: \nEstado: `}
                     label="Copiar Modelo"
                   />
@@ -245,7 +231,7 @@ export default function Clientes() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-12">
-                    <Checkbox 
+                    <Checkbox
                       checked={selectedIds.length === customers.length && customers.length > 0}
                       onCheckedChange={handleSelectAll}
                     />
@@ -262,7 +248,7 @@ export default function Clientes() {
                 {customers.map((customer: any) => (
                   <TableRow key={customer.id}>
                     <TableCell>
-                      <Checkbox 
+                      <Checkbox
                         checked={selectedIds.includes(customer.id)}
                         onCheckedChange={() => handleSelectOne(customer.id)}
                       />

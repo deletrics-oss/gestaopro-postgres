@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { productsApi, suppliersApi } from "@/lib/api-client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -30,27 +30,16 @@ export default function Produtos() {
 
   const { data: products = [] } = useQuery({
     queryKey: ['products'],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('products').select('*, suppliers(name)').order('created_date', { ascending: false });
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => productsApi.getAll(),
   });
 
   const { data: suppliers = [] } = useQuery({
     queryKey: ['suppliers'],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('suppliers').select('*').order('name');
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => suppliersApi.getAll(),
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: any) => {
-      const { error } = await supabase.from('products').insert([data]);
-      if (error) throw error;
-    },
+    mutationFn: (data: any) => productsApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       toast.success("Produto cadastrado com sucesso!");
@@ -60,10 +49,7 @@ export default function Produtos() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: any }) => {
-      const { error } = await supabase.from('products').update(data).eq('id', id);
-      if (error) throw error;
-    },
+    mutationFn: ({ id, data }: { id: string; data: any }) => productsApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       toast.success("Produto atualizado com sucesso!");
@@ -73,10 +59,7 @@ export default function Produtos() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from('products').delete().eq('id', id);
-      if (error) throw error;
-    },
+    mutationFn: (id: string) => productsApi.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       toast.success("Produto excluído com sucesso!");
@@ -86,7 +69,7 @@ export default function Produtos() {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    
+
     const componentsCost = components.reduce((sum, comp) => sum + Number(comp.cost), 0);
     const totalCost = Number(materialCost) + Number(laborCost) + Number(otherCosts) + componentsCost;
     const salePrice = parseFloat(formData.get('unit_price') as string) || 0;
@@ -112,16 +95,12 @@ export default function Produtos() {
       createMutation.mutate(data);
     }
 
-    // Salvar componentes no Lovable Cloud
-    if (components.length > 0) {
-      components.forEach(async (comp) => {
-        await supabase.from('product_components').insert({
-          name: comp.name,
-          description: comp.description,
-          cost: comp.cost,
-        });
-      });
-    }
+    // TODO: Implementar salvamento de componentes quando necessário
+    // if (components.length > 0) {
+    //   components.forEach(async (comp) => {
+    //     // await componentsApi.create(comp);
+    //   });
+    // }
   };
 
   const handleClone = async (product: any) => {
@@ -140,8 +119,7 @@ export default function Produtos() {
 
   const deleteMultipleMutation = useMutation({
     mutationFn: async (ids: string[]) => {
-      const { error } = await supabase.from('products').delete().in('id', ids);
-      if (error) throw error;
+      await Promise.all(ids.map(id => productsApi.delete(id)));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -159,7 +137,7 @@ export default function Produtos() {
   };
 
   const handleSelectOne = (id: string) => {
-    setSelectedIds(prev => 
+    setSelectedIds(prev =>
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
   };
@@ -182,7 +160,7 @@ export default function Produtos() {
         p.name, p.sku || '', p.category || '', p.stock_quantity, p.unit_price, p.cost_price
       ])
     ].map(row => row.join(',')).join('\n');
-    
+
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -226,12 +204,12 @@ export default function Produtos() {
 
         {showImporter && (
           <div className="mb-6">
-            <CSVImporter 
-              type="products" 
+            <CSVImporter
+              type="products"
               onSuccess={() => {
                 queryClient.invalidateQueries({ queryKey: ['products'] });
                 setShowImporter(false);
-              }} 
+              }}
             />
           </div>
         )}
@@ -301,7 +279,7 @@ export default function Produtos() {
 
                 {/* Gerenciador de Componentes */}
                 <div className="md:col-span-2">
-                  <ProductComponentsManager 
+                  <ProductComponentsManager
                     components={components}
                     onChange={setComponents}
                   />
@@ -345,11 +323,11 @@ export default function Produtos() {
                 </div>
                 <div>
                   <Label htmlFor="cost_price">Preço de Custo (Calculado Automaticamente)</Label>
-                  <Input 
-                    id="cost_price" 
-                    name="cost_price" 
-                    type="number" 
-                    step="0.01" 
+                  <Input
+                    id="cost_price"
+                    name="cost_price"
+                    type="number"
+                    step="0.01"
                     value={(Number(materialCost) + Number(laborCost) + Number(otherCosts) + components.reduce((sum, comp) => sum + Number(comp.cost), 0)).toFixed(2)}
                     readOnly
                     className="bg-muted"
@@ -374,7 +352,7 @@ export default function Produtos() {
                 <div className="md:col-span-2 flex gap-2">
                   <Button type="submit">{editingProduct ? 'Atualizar' : 'Cadastrar'}</Button>
                   <Button type="button" variant="outline" onClick={() => { setShowForm(false); setEditingProduct(null); }}>Cancelar</Button>
-                  <CopyButton 
+                  <CopyButton
                     textToCopy={`Nome: \nSKU: \nCategoria: \nPreço Venda: R$ 0,00\nPreço Custo: R$ 0,00\nEstoque: 0`}
                     label="Copiar Modelo"
                   />
