@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import pg from 'pg';
@@ -15,11 +16,11 @@ const PORT = process.env.PORT || 9099;
 
 // Configuração do banco de dados
 const pool = new Pool({
-  user: 'gestaopro_user',
-  host: 'localhost',
-  database: 'gestaopro',
-  password: 'gestaopro123',
-  port: 5432,
+  user: process.env.DB_USER || 'gestaopro_user',
+  host: process.env.DB_HOST || 'localhost',
+  database: process.env.DB_NAME || 'gestaopro',
+  password: process.env.DB_PASSWORD || 'gestaopro123',
+  port: process.env.DB_PORT || 5432,
 });
 
 // Teste de conexão
@@ -67,7 +68,7 @@ const authenticateToken = (req, res, next) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    
+
     const result = await pool.query(
       'SELECT * FROM users WHERE email = $1 AND active = true',
       [email]
@@ -144,13 +145,13 @@ const sanitizeValue = (value) => {
 const filterValidColumns = (data, tableName) => {
   const validColumns = tableColumns[tableName] || [];
   const filtered = {};
-  
+
   for (const [key, value] of Object.entries(data)) {
     if (validColumns.includes(key) && value !== undefined && value !== null && value !== '' && key !== 'id') {
       filtered[key] = value;
     }
   }
-  
+
   return filtered;
 };
 
@@ -158,7 +159,7 @@ const filterValidColumns = (data, tableName) => {
 const createRecord = (tableName) => async (req, res) => {
   try {
     const data = req.body;
-    
+
     // Filtrar apenas colunas válidas
     const filteredData = filterValidColumns(data, tableName);
 
@@ -207,11 +208,11 @@ const getRecord = (tableName) => async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(`SELECT * FROM ${tableName} WHERE id = $1`, [id]);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Registro não encontrado' });
     }
-    
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error(`Erro ao buscar ${tableName}:`, error);
@@ -224,7 +225,7 @@ const updateRecord = (tableName) => async (req, res) => {
   try {
     const { id } = req.params;
     const data = req.body;
-    
+
     // Filtrar apenas colunas válidas
     const filteredData = filterValidColumns(data, tableName);
 
@@ -246,11 +247,11 @@ const updateRecord = (tableName) => async (req, res) => {
     `;
 
     const result = await pool.query(query, values);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Registro não encontrado' });
     }
-    
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error(`Erro ao atualizar ${tableName}:`, error);
@@ -263,11 +264,11 @@ const deleteRecord = (tableName) => async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(`DELETE FROM ${tableName} WHERE id = $1 RETURNING *`, [id]);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Registro não encontrado' });
     }
-    
+
     res.json({ message: 'Registro deletado com sucesso', data: result.rows[0] });
   } catch (error) {
     console.error(`Erro ao deletar ${tableName}:`, error);
@@ -302,7 +303,7 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
         (SELECT COALESCE(SUM(total_revenue), 0) FROM sales WHERE sale_date >= CURRENT_DATE - INTERVAL '30 days') as monthly_sales,
         (SELECT COALESCE(SUM(value), 0) FROM expenses WHERE expense_date >= CURRENT_DATE - INTERVAL '30 days') as monthly_expenses
     `);
-    
+
     res.json(stats.rows[0]);
   } catch (error) {
     console.error('Erro ao buscar estatísticas:', error);
