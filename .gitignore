@@ -1,0 +1,12 @@
+node_modules/
+.env
+*.log
+data/
+db/
+*.sql
+postgres/
+.nyc_output
+coverage/
+.DS_Store
+.gitignore
+

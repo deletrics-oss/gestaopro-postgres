@@ -1,0 +1,408 @@
+import express from 'express';
+import cors from 'cors';
+import pg from 'pg';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const { Pool } = pg;
+const app = express();
+const PORT = process.env.PORT || 9099;
+
+// Configuração do banco de dados
+const pool = new Pool({
+  user: 'gestaopro_user',
+  host: 'localhost',
+  database: 'gestaopro',
+  password: 'gestaopro123',
+  port: 5432,
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Servir arquivos estáticos do frontend (produção)
+const distPath = path.join(__dirname, '..', 'dist');
+app.use(express.static(distPath));
+
+// Secret para JWT
+const JWT_SECRET = 'gestaopro-secret-key-change-in-production';
+
+// Middleware de autenticação
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Token não fornecido' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Token inválido' });
+    }
+    req.user = user;
+    next();
+  });
+};
+
+// ========== ROTAS DE AUTENTICAÇÃO ==========
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    const result = await pool.query(
+      'SELECT * FROM users WHERE email = $1 AND active = true',
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
+
+    const user = result.rows[0];
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    // Criar sessão
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await pool.query(
+      'INSERT INTO sessions (user_id, token, expires_at) VALUES ($1, $2, $3)',
+      [user.id, token, expiresAt]
+    );
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    console.error('Erro no login:', error);
+    res.status(500).json({ error: 'Erro ao fazer login' });
+  }
+});
+
+// Registro
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+    
+    // Verificar se usuário já existe
+    const existingUser = await pool.query(
+      'SELECT id FROM users WHERE email = $1',
+      [email]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ error: 'Email já cadastrado' });
+    }
+
+    // Hash da senha
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    // Criar usuário
+    const result = await pool.query(
+      'INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4) RETURNING id, email, name, role',
+      [email, passwordHash, name, 'user']
+    );
+
+    const user = result.rows[0];
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      token,
+      user
+    });
+  } catch (error) {
+    console.error('Erro no registro:', error);
+    res.status(500).json({ error: 'Erro ao registrar usuário' });
+  }
+});
+
+// Logout
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader.split(' ')[1];
+    
+    await pool.query('DELETE FROM sessions WHERE token = $1', [token]);
+    
+    res.json({ message: 'Logout realizado com sucesso' });
+  } catch (error) {
+    console.error('Erro no logout:', error);
+    res.status(500).json({ error: 'Erro ao fazer logout' });
+  }
+});
+
+// ========== ROTAS GENÉRICAS PARA CRUD ==========
+
+// Função genérica para listar registros
+const listRecords = (tableName) => async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT * FROM ${tableName} ORDER BY created_date DESC`);
+    res.json(result.rows);
+  } catch (error) {
+    console.error(`Erro ao listar ${tableName}:`, error);
+    res.status(500).json({ error: `Erro ao listar registros de ${tableName}` });
+  }
+};
+
+// Função genérica para buscar registro por ID
+const getRecord = (tableName) => async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`SELECT * FROM ${tableName} WHERE id = $1`, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Registro não encontrado' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(`Erro ao buscar ${tableName}:`, error);
+    res.status(500).json({ error: `Erro ao buscar registro de ${tableName}` });
+  }
+};
+
+// Função genérica para criar registro
+const createRecord = (tableName) => async (req, res) => {
+  try {
+    const data = req.body;
+    
+    // Filtrar campos undefined, null e vazios
+    const filteredData = Object.entries(data)
+      .filter(([_, value]) => value !== undefined && value !== null && value !== '')
+      .reduce((obj, [key, value]) => ({ ...obj, [key]: value }), {});
+    
+    if (Object.keys(filteredData).length === 0) {
+      return res.status(400).json({ error: 'Nenhum dado válido fornecido' });
+    }
+    
+    const columns = Object.keys(filteredData).join(', ');
+    const values = Object.values(filteredData);
+    const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
+    
+    const result = await pool.query(
+      `INSERT INTO ${tableName} (${columns}) VALUES (${placeholders}) RETURNING *`,
+      values
+    );
+    
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error(`Erro ao criar ${tableName}:`, error);
+    res.status(500).json({ error: `Erro ao criar registro em ${tableName}`, details: error.message });
+  }
+};
+
+// Função genérica para atualizar registro
+const updateRecord = (tableName) => async (req, res) => {
+  try {
+    const { id } = req.params;
+    const data = req.body;
+    
+    // Filtrar campos undefined, null e vazios
+    const filteredData = Object.entries(data)
+      .filter(([_, value]) => value !== undefined && value !== null && value !== '')
+      .reduce((obj, [key, value]) => ({ ...obj, [key]: value }), {});
+    
+    if (Object.keys(filteredData).length === 0) {
+      return res.status(400).json({ error: 'Nenhum dado válido fornecido para atualização' });
+    }
+    
+    const setClause = Object.keys(filteredData)
+      .map((key, i) => `${key} = $${i + 2}`)
+      .join(', ');
+    
+    const values = [id, ...Object.values(filteredData)];
+    
+    const result = await pool.query(
+      `UPDATE ${tableName} SET ${setClause}, updated_date = NOW() WHERE id = $1 RETURNING *`,
+      values
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Registro não encontrado' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(`Erro ao atualizar ${tableName}:`, error);
+    res.status(500).json({ error: `Erro ao atualizar registro em ${tableName}`, details: error.message });
+  }
+};
+
+// Função genérica para deletar registro
+const deleteRecord = (tableName) => async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`DELETE FROM ${tableName} WHERE id = $1 RETURNING *`, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Registro não encontrado' });
+    }
+    
+    res.json({ message: 'Registro deletado com sucesso' });
+  } catch (error) {
+    console.error(`Erro ao deletar ${tableName}:`, error);
+    res.status(500).json({ error: `Erro ao deletar registro de ${tableName}` });
+  }
+};
+
+// ========== ROTAS CRUD PARA CADA TABELA ==========
+
+const tables = [
+  'customers',
+  'suppliers',
+  'employees',
+  'products',
+  'materials',
+  'sales',
+  'services',
+  'expenses',
+  'marketplace_orders',
+  'production_orders',
+  'machines_vehicles',
+  'invoices'
+];
+
+tables.forEach(table => {
+  app.get(`/api/${table}`, authenticateToken, listRecords(table));
+  app.get(`/api/${table}/:id`, authenticateToken, getRecord(table));
+  app.post(`/api/${table}`, authenticateToken, createRecord(table));
+  app.put(`/api/${table}/:id`, authenticateToken, updateRecord(table));
+  app.delete(`/api/${table}/:id`, authenticateToken, deleteRecord(table));
+});
+
+// ========== ROTAS ESPECIAIS ==========
+
+// Rotas de usuários (com criação de senha hash)
+app.get('/api/users', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name, email, role, active, created_date FROM users ORDER BY created_date DESC');
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Erro ao listar usuários:', error);
+    res.status(500).json({ error: 'Erro ao listar usuários' });
+  }
+});
+
+app.post('/api/users', authenticateToken, async (req, res) => {
+  try {
+    const { name, email, password, role, active } = req.body;
+    
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email e senha são obrigatórios' });
+    }
+    
+    // Verificar se email já existe
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: 'Email já cadastrado' });
+    }
+    
+    // Hash da senha
+    const passwordHash = await bcrypt.hash(password, 10);
+    
+    const result = await pool.query(
+      'INSERT INTO users (name, email, password_hash, role, active) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, active, created_date',
+      [name || email, email, passwordHash, role || 'user', active !== false]
+    );
+    
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Erro ao criar usuário:', error);
+    res.status(500).json({ error: 'Erro ao criar usuário' });
+  }
+});
+
+app.delete('/api/users/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Não permitir excluir admin principal
+    const user = await pool.query('SELECT email FROM users WHERE id = $1', [id]);
+    if (user.rows[0]?.email === 'admin@gestaopro.com') {
+      return res.status(403).json({ error: 'Não é possível excluir o admin principal' });
+    }
+    
+    const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+    
+    res.json({ message: 'Usuário excluído com sucesso' });
+  } catch (error) {
+    console.error('Erro ao excluir usuário:', error);
+    res.status(500).json({ error: 'Erro ao excluir usuário' });
+  }
+});
+
+// Dashboard - estatísticas
+app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
+  try {
+    const [sales, expenses, customers, products] = await Promise.all([
+      pool.query('SELECT COUNT(*) as count, COALESCE(SUM(total_revenue), 0) as total FROM sales'),
+      pool.query('SELECT COUNT(*) as count, COALESCE(SUM(value), 0) as total FROM expenses'),
+      pool.query('SELECT COUNT(*) as count FROM customers'),
+      pool.query('SELECT COUNT(*) as count FROM products WHERE stock_quantity <= minimum_stock')
+    ]);
+
+    res.json({
+      sales: sales.rows[0],
+      expenses: expenses.rows[0],
+      customers: customers.rows[0],
+      lowStock: products.rows[0]
+    });
+  } catch (error) {
+    console.error('Erro ao buscar estatísticas:', error);
+    res.status(500).json({ error: 'Erro ao buscar estatísticas' });
+  }
+});
+
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', message: 'GestaoPro API está funcionando' });
+});
+
+// Rota catch-all para SPA (deve ser a última)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
+
+// Iniciar servidor
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  console.log(`📊 API disponível em http://localhost:${PORT}/api`);
+  console.log(`🌐 Frontend disponível em http://localhost:${PORT}`);
+});
+
+// Tratamento de erros não capturados
+process.on('unhandledRejection', (error) => {
+  console.error('Erro não tratado:', error);
+});
