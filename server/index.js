@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 
 const { Pool } = pg;
 const app = express();
-const PORT = process.env.PORT || 9099;
+const PORT = process.env.PORT || 9199;
 
 // Configuração do banco de dados
 const pool = new Pool({
