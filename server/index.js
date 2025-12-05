@@ -113,6 +113,76 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Registro
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+
+    // Verificar se usuário já existe
+    const existingUser = await pool.query(
+      'SELECT id FROM users WHERE email = $1',
+      [email]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ error: 'Email já cadastrado' });
+    }
+
+    // Hash da senha
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    // Criar usuário
+    const result = await pool.query(
+      'INSERT INTO users (email, password_hash, name, role, active) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, name, role',
+      [email, passwordHash, name, 'user', true]
+    );
+
+    const user = result.rows[0];
+
+    // Gerar token
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    // Criar sessão
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await pool.query(
+      'INSERT INTO sessions (user_id, token, expires_at) VALUES ($1, $2, $3)',
+      [user.id, token, expiresAt]
+    );
+
+    res.status(201).json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    console.error('Erro no registro:', error);
+    res.status(500).json({ error: 'Erro ao criar usuário' });
+  }
+});
+
+// Logout
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    await pool.query('DELETE FROM sessions WHERE token = $1', [token]);
+    res.json({ message: 'Logout realizado com sucesso' });
+  } catch (error) {
+    console.error('Erro no logout:', error);
+    res.status(500).json({ error: 'Erro ao fazer logout' });
+  }
+});
+
+
 // ========== ROTAS GENÉRICAS PARA CRUD ==========
 
 // Mapeamento de colunas válidas para cada tabela
